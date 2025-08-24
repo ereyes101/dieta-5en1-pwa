@@ -1,0 +1,938 @@
+# Create a ready-to-deploy Vite + React + TypeScript + Tailwind PWA project for GitHub Pages
+import os, json, textwrap, shutil, zipfile, pathlib
+
+project_dir = "/mnt/data/dieta5en1-pwa"
+if os.path.exists(project_dir):
+    shutil.rmtree(project_dir)
+os.makedirs(project_dir, exist_ok=True)
+
+# package.json
+package_json = {
+  "name": "dieta-5en1-pwa",
+  "version": "1.0.0",
+  "private": True,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "postinstall": "tailwindcss init -p >/dev/null 2>&1 || true"
+  },
+  "dependencies": {
+    "framer-motion": "^11.3.31",
+    "jspdf": "^2.5.1",
+    "lucide-react": "^0.453.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.12.7"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.10",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.3"
+  }
+}
+with open(os.path.join(project_dir, "package.json"), "w") as f:
+    json.dump(package_json, f, indent=2)
+
+# tsconfig.json
+tsconfig = {
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": True,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": True,
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": True,
+    "isolatedModules": True,
+    "noEmit": True,
+    "jsx": "react-jsx",
+    "types": []
+  },
+  "include": ["src"]
+}
+with open(os.path.join(project_dir, "tsconfig.json"), "w") as f:
+    json.dump(tsconfig, f, indent=2)
+
+# vite.config.ts
+vite_config = textwrap.dedent("""
+  import { defineConfig } from 'vite'
+  import react from '@vitejs/plugin-react'
+
+  // https://vitejs.dev/config/
+  export default defineConfig({
+    plugins: [react()],
+    base: '/dieta-5en1-pwa/',
+    build: {
+      outDir: 'dist'
+    }
+  })
+""")
+with open(os.path.join(project_dir, "vite.config.ts"), "w") as f:
+    f.write(vite_config)
+
+# Tailwind config files
+tailwind_config = textwrap.dedent("""
+  /** @type {import('tailwindcss').Config} */
+  export default {
+    content: ['./index.html', './src/**/*.{ts,tsx}'],
+    theme: {
+      extend: {},
+    },
+    plugins: [],
+  }
+""")
+with open(os.path.join(project_dir, "tailwind.config.js"), "w") as f:
+    f.write(tailwind_config)
+
+postcss_config = textwrap.dedent("""
+  export default {
+    plugins: {
+      tailwindcss: {},
+      autoprefixer: {},
+    },
+  }
+""")
+with open(os.path.join(project_dir, "postcss.config.js"), "w") as f:
+    f.write(postcss_config)
+
+# src structure
+os.makedirs(os.path.join(project_dir, "src"), exist_ok=True)
+
+main_tsx = textwrap.dedent("""
+  import React from 'react'
+  import ReactDOM from 'react-dom/client'
+  import App from './App'
+  import './index.css'
+  import { registerSW } from './sw-register'
+
+  registerSW()
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>,
+  )
+""")
+with open(os.path.join(project_dir, "src", "main.tsx"), "w") as f:
+    f.write(main_tsx)
+
+index_css = textwrap.dedent("""
+  @tailwind base;
+  @tailwind components;
+  @tailwind utilities;
+
+  html, body, #root { height: 100%; }
+  body { background: #f9fafb; }
+""")
+with open(os.path.join(project_dir, "src", "index.css"), "w") as f:
+    f.write(index_css)
+
+# App.tsx content - adapted from canvas code (TypeScript-compatible)
+app_tsx = textwrap.dedent(r"""
+  import React, { useEffect, useMemo, useState } from "react";
+  import { motion } from "framer-motion";
+  import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from "recharts";
+  import { Activity, Apple, Calendar, Check, Cloud, FileDown, FileJson, Flame, Leaf, Settings, Sun, Utensils, Weight } from "lucide-react";
+
+  type ActivityKey = 'sedentario' | 'ligero' | 'moderado' | 'activo' | 'muy_activo';
+  const ACTIVITY_FACTORS: Record<ActivityKey, number> = {
+    sedentario: 1.2,
+    ligero: 1.375,
+    moderado: 1.55,
+    activo: 1.725,
+    muy_activo: 1.9,
+  };
+
+  function clamp(n: number, min: number, max: number) { return Math.max(min, Math.min(max, n)); }
+  function round(n: number, d = 0) { const m = Math.pow(10, d); return Math.round(n * m) / m; }
+
+  function mifflinStJeor(sexo: "M"|"F", edad: number, talla_cm: number, peso_kg: number) {
+    return (10 * peso_kg) + (6.25 * talla_cm) - (5 * edad) + (sexo === "M" ? 5 : -161);
+  }
+
+  function useLocalStorage<T>(key: string, initial: T) {
+    const [state, setState] = useState<T>(() => {
+      try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) as T : initial; } catch { return initial; }
+    });
+    useEffect(() => { try { localStorage.setItem(key, JSON.stringify(state)); } catch {} }, [key, state]);
+    return [state, setState] as const;
+  }
+
+  type User = {
+    id: string;
+    sexo: "M"|"F";
+    edad: number;
+    talla_cm: number;
+    peso_kg: number;
+    actividad: ActivityKey;
+    meta_kg_sem: number;
+    ventana: "14:10" | "16:8" | "Off";
+    salvaguardas: boolean;
+    prot_gkg: number;
+    sodio_lim_mg: number;
+    azucar_lim_pct: number;
+    fibra_obj_g: number;
+  };
+
+  export type Ingredient = { nombre: string; unidad: string; cantidad: number; equivalentes?: string[] };
+  export type Recipe = { id: string; nombre: string; kcal: number; prot_g: number; fibra_g: number; sodio_mg: number; etiquetas: string[]; ingredientes: Ingredient[]; instrucciones: string };
+
+  type DayLog = { fecha: string; peso_kg?: number; cintura_cm?: number; pasos?: number; sueno_h?: number; agua_ml?: number; sintomas?: string[]; adherencia_pct?: number };
+  type Meal = { fecha: string; tipo: "desayuno" | "almuerzo" | "cena" | "colación"; receta_id?: string; kcal?: number; prot_g?: number; fibra_g?: number; sodio_mg?: number; nota?: string };
+
+  const defaultUser: User = {
+    id: "USR-0001",
+    sexo: "M",
+    edad: 54,
+    talla_cm: 180,
+    peso_kg: 105,
+    actividad: "ligero",
+    meta_kg_sem: 1,
+    ventana: "14:10",
+    salvaguardas: true,
+    prot_gkg: 1.5,
+    sodio_lim_mg: 2000,
+    azucar_lim_pct: 6,
+    fibra_obj_g: 30,
+  };
+
+  const BASE_RECIPES: Omit<Recipe, "id">[] = [
+    {
+      nombre: "Avena + omelette verde + papaya",
+      kcal: 400, prot_g: 32, fibra_g: 8, sodio_mg: 420,
+      etiquetas: ["desayuno", "alta proteína", "alta fibra"],
+      ingredientes: [
+        { nombre: "Avena en hojuelas", unidad: "g", cantidad: 50, equivalentes: ["avena integral"] },
+        { nombre: "Leche descremada o agua", unidad: "ml", cantidad: 200 },
+        { nombre: "Huevo", unidad: "pz", cantidad: 2 },
+        { nombre: "Espinaca", unidad: "g", cantidad: 40 },
+        { nombre: "Tomate", unidad: "g", cantidad: 50 },
+        { nombre: "Papaya", unidad: "g", cantidad: 150 },
+        { nombre: "Aceite de oliva", unidad: "cda", cantidad: 1 },
+      ],
+      instrucciones: "Cocer avena; saltear espinaca y tomate; hacer omelette; servir con papaya.",
+    },
+    {
+      nombre: "Ensalada grande + pollo/garbanzo + integral",
+      kcal: 600, prot_g: 40, fibra_g: 10, sodio_mg: 600,
+      etiquetas: ["almuerzo", "método del plato", "bajo ultraprocesados"],
+      ingredientes: [
+        { nombre: "Hojas verdes mixtas", unidad: "g", cantidad: 120, equivalentes: ["espinaca", "lechuga romana"] },
+        { nombre: "Pepino", unidad: "g", cantidad: 80 },
+        { nombre: "Zanahoria", unidad: "g", cantidad: 60 },
+        { nombre: "Pechuga de pollo cocida", unidad: "g", cantidad: 120, equivalentes: ["garbanzos cocidos 150 g"] },
+        { nombre: "Arroz integral/Papa al horno", unidad: "g", cantidad: 120 },
+        { nombre: "Aceite de oliva", unidad: "cda", cantidad: 1 },
+        { nombre: "Fruta fresca", unidad: "g", cantidad: 120 },
+      ],
+      instrucciones: "Armar ensalada; añadir proteína; acompañar con integral/tubérculo.",
+    },
+    {
+      nombre: "Sopa de verduras + pescado + arepa integral",
+      kcal: 500, prot_g: 35, fibra_g: 7, sodio_mg: 520,
+      etiquetas: ["cena", "pescado", "bajo sodio"],
+      ingredientes: [
+        { nombre: "Surtido de verduras", unidad: "g", cantidad: 250, equivalentes: ["brócoli", "coliflor", "zanahoria"] },
+        { nombre: "Filete de trucha/tilapia", unidad: "g", cantidad: 140, equivalentes: ["atún", "sardina"] },
+        { nombre: "Arepa integral", unidad: "g", cantidad: 60, equivalentes: ["½ taza quinua cocida"] },
+        { nombre: "Aceite de oliva", unidad: "cda", cantidad: 1 },
+        { nombre: "Frutos rojos", unidad: "g", cantidad: 100 },
+      ],
+      instrucciones: "Preparar sopa ligera; planchar pescado; servir con arepa integral.",
+    },
+    {
+      nombre: "Yogur natural + nueces/almendras",
+      kcal: 320, prot_g: 20, fibra_g: 3, sodio_mg: 180,
+      etiquetas: ["colación", "alta proteína"],
+      ingredientes: [
+        { nombre: "Yogur descremado", unidad: "g", cantidad: 200 },
+        { nombre: "Mezcla de frutos secos", unidad: "g", cantidad: 25, equivalentes: ["maní", "almendras", "nueces"] },
+        { nombre: "Semillas (linaza/chía)", unidad: "g", cantidad: 8 },
+      ],
+      instrucciones: "Mezclar y consumir frío.",
+    },
+    {
+      nombre: "Sardinas con hogao ligero + ensalada + arepa integral",
+      kcal: 520, prot_g: 38, fibra_g: 9, sodio_mg: 650,
+      etiquetas: ["almuerzo", "pescado azul", "alta proteína"],
+      ingredientes: [
+        { nombre: "Sardinas en agua escurridas", unidad: "g", cantidad: 120 },
+        { nombre: "Tomate y cebolla (hogao ligero)", unidad: "g", cantidad: 120 },
+        { nombre: "Arepa integral", unidad: "g", cantidad: 60 },
+        { nombre: "Ensalada verde", unidad: "g", cantidad: 150 },
+        { nombre: "Aceite de oliva", unidad: "cda", cantidad: 1 },
+      ],
+      instrucciones: "Saltear hogao con mínimo aceite; servir con sardinas y ensalada.",
+    },
+    {
+      nombre: "Lentejas estofadas + ensalada crujiente",
+      kcal: 550, prot_g: 28, fibra_g: 14, sodio_mg: 520,
+      etiquetas: ["almuerzo", "legumbres", "alta fibra"],
+      ingredientes: [
+        { nombre: "Lentejas cocidas", unidad: "g", cantidad: 180 },
+        { nombre: "Verduras para guiso", unidad: "g", cantidad: 150 },
+        { nombre: "Aceite de oliva", unidad: "cda", cantidad: 1 },
+        { nombre: "Ensalada verde", unidad: "g", cantidad: 120 },
+      ],
+      instrucciones: "Guisar lentejas con verduras; acompañar con ensalada.",
+    },
+  ];
+
+  function generateRecipes(): Recipe[] {
+    const out: Recipe[] = [];
+    const bands = [300, 400, 500, 600, 700];
+    let id = 1;
+    for (let i = 0; i < 60; i++) {
+      const base = BASE_RECIPES[i % BASE_RECIPES.length];
+      const band = bands[i % bands.length];
+      const scale = band / base.kcal;
+      out.push({
+        id: `R${id++}`,
+        nombre: `${base.nombre} — v${(i % 12) + 1}`,
+        kcal: round(base.kcal * scale),
+        prot_g: round(base.prot_g * scale, 0),
+        fibra_g: round(base.fibra_g * scale, 0),
+        sodio_mg: round(base.sodio_mg * scale, 0),
+        etiquetas: [...base.etiquetas],
+        ingredientes: base.ingredientes.map(ing => ({ ...ing, cantidad: round(ing.cantidad * scale, 0) })),
+        instrucciones: base.instrucciones,
+      });
+    }
+    return out;
+  }
+
+  function Chip({active, onClick, children}:{active?:boolean; onClick?:()=>void; children: React.ReactNode}){
+    return (
+      <button onClick={onClick} className={`px-3 py-1 rounded-full border ${active?"bg-black text-white border-black":"border-gray-300 text-gray-800"} transition`}>{children}</button>
+    );
+  }
+
+  function Card({title, icon, children, footer}:{title:string; icon?:React.ReactNode; children:React.ReactNode; footer?:React.ReactNode}){
+    return (
+      <div className="bg-white rounded-2xl shadow-sm p-4 border border-gray-100">
+        <div className="flex items-center gap-2 mb-2">
+          {icon}
+          <h3 className="text-lg font-semibold">{title}</h3>
+        </div>
+        <div>{children}</div>
+        {footer && <div className="pt-3 mt-3 border-t text-sm text-gray-500">{footer}</div>}
+      </div>
+    );
+  }
+
+  function StatBar({label, value, target, unit}:{label:string; value:number; target:number; unit:string}){
+    const pct = clamp((value/Math.max(target,1))*100, 0, 120);
+    return (
+      <div>
+        <div className="flex justify-between text-sm mb-1"><span>{label}</span><span>{round(value,0)} / {round(target,0)} {unit}</span></div>
+        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+          <div className={`h-full ${pct>=100?"bg-green-500":"bg-gray-900"}`} style={{width: `${pct}%`}} />
+        </div>
+      </div>
+    );
+  }
+
+  export default function App(){
+    const [tab, setTab] = useState<"inicio"|"plan"|"registro"|"recetas"|"reportes">("inicio");
+    const [user, setUser] = useLocalStorage<User>("d51_user", defaultUser);
+    const [meals, setMeals] = useLocalStorage<Meal[]>("d51_meals", []);
+    const [logs, setLogs] = useLocalStorage<DayLog[]>("d51_logs", []);
+    const [recipes] = useState<Recipe[]>(() => generateRecipes());
+
+    const targets = useMemo(() => {
+      const bmr = mifflinStJeor(user.sexo, user.edad, user.talla_cm, user.peso_kg);
+      const tdee = bmr * ACTIVITY_FACTORS[user.actividad];
+      const deficit = clamp(user.meta_kg_sem * 1000, 0, 1200);
+      const floor = user.sexo === "M" ? 1500 : 1200;
+      const kcal_obj = user.salvaguardas ? Math.max(round(tdee - deficit), floor) : round(tdee - deficit);
+      const proteina_obj_g = round(user.prot_gkg * user.peso_kg);
+      const fibra_obj_g = user.fibra_obj_g;
+      const sodio_lim_mg = user.sodio_lim_mg;
+      const azucar_lim_pct = user.azucar_lim_pct;
+      return { bmr: round(bmr), tdee: round(tdee), kcal_obj, proteina_obj_g, fibra_obj_g, sodio_lim_mg, azucar_lim_pct };
+    }, [user]);
+
+    const hoy = new Date();
+    const hoyStr = hoy.toISOString().slice(0,10);
+    const mealsToday = meals.filter(m => m.fecha === hoyStr);
+    const totalsToday = mealsToday.reduce((acc, m) => ({
+      kcal: acc.kcal + (m.kcal || recipes.find(r=>r.id===m.receta_id)?.kcal || 0),
+      prot_g: acc.prot_g + (m.prot_g || recipes.find(r=>r.id===m.receta_id)?.prot_g || 0),
+      fibra_g: acc.fibra_g + (m.fibra_g || recipes.find(r=>r.id===m.receta_id)?.fibra_g || 0),
+      sodio_mg: acc.sodio_mg + (m.sodio_mg || recipes.find(r=>r.id===m.receta_id)?.sodio_mg || 0),
+    }), {kcal:0, prot_g:0, fibra_g:0, sodio_mg:0});
+
+    const adherencia = Math.min(100, Math.round((
+      (totalsToday.kcal>0? Math.min(1, totalsToday.kcal/targets.kcal_obj):0) * 0.4 +
+      Math.min(1, totalsToday.prot_g/targets.proteina_obj_g) * 0.3 +
+      Math.min(1, totalsToday.fibra_g/targets.fibra_obj_g) * 0.2 +
+      Math.min(1, (targets.sodio_lim_mg)/(totalsToday.sodio_mg||targets.sodio_lim_mg)) * 0.1
+    )*100));
+
+    const lastLog = logs.slice().reverse().find(l => !!l.peso_kg);
+
+    function addMeal(meal: Meal){ setMeals([...meals, meal]); }
+    function saveUser(u: Partial<User>){ setUser({...user, ...u}); }
+    function logToday(partial: Partial<DayLog>){
+      const idx = logs.findIndex(l => l.fecha === hoyStr);
+      const updated: DayLog = { ...(idx>=0? logs[idx] : {fecha: hoyStr}), ...partial };
+      const arr = idx>=0 ? [...logs.slice(0,idx), updated, ...logs.slice(idx+1)] : [...logs, updated];
+      setLogs(arr);
+    }
+
+    return (
+      <div className="min-h-screen bg-gray-50 text-gray-900" style={{fontFamily:"Gadugi, system-ui, -apple-system, Segoe UI, Roboto, Inter, sans-serif"}}>
+        <header className="sticky top-0 z-10 backdrop-blur bg-white/70 border-b border-gray-100">
+          <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <motion.div initial={{scale:0.9, opacity:0}} animate={{scale:1, opacity:1}} transition={{type:"spring", stiffness:300}} className="w-8 h-8 rounded-xl bg-black text-white grid place-items-center"><Leaf size={18}/></motion.div>
+              <div className="font-semibold">Dieta 5-en-1</div>
+            </div>
+            <button onClick={()=>setTab("plan")} className="text-sm px-3 py-1 rounded-full border border-gray-300">Ajustes</button>
+          </div>
+        </header>
+
+        <main className="max-w-3xl mx-auto px-4 py-4 pb-24">
+          {tab === "inicio" && (
+            <section className="space-y-4">
+              <Card title="Progreso de hoy" icon={<Flame className="text-gray-600" size={18}/>}
+                footer={<div className="flex items-center gap-2"><Check size={16}/> Mantén la sencillez: verduras ½ plato, proteína ¼, integral ¼.</div>}>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <StatBar label="Calorías" value={totalsToday.kcal} target={targets.kcal_obj} unit="kcal"/>
+                  <StatBar label="Proteína" value={totalsToday.prot_g} target={targets.proteina_obj_g} unit="g"/>
+                  <StatBar label="Fibra" value={totalsToday.fibra_g} target={targets.fibra_obj_g} unit="g"/>
+                  <StatBar label="Sodio" value={totalsToday.sodio_mg} target={targets.sodio_lim_mg} unit="mg"/>
+                </div>
+                <div className="mt-3 text-sm text-gray-600">Adherencia estimada: <span className="font-semibold">{adherencia}%</span></div>
+                <div className="mt-4">
+                  <button onClick={()=>setTab("registro")} className="w-full sm:w-auto px-4 py-2 rounded-2xl bg-black text-white">Registrar</button>
+                </div>
+              </Card>
+
+              <Card title="Hoy" icon={<Calendar className="text-gray-600" size={18}/> }>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between"><span>Fecha</span><span>{hoyStr}</span></div>
+                  <div className="flex justify-between"><span>Peso</span><span>{lastLog?.peso_kg ? `${lastLog.peso_kg} kg` : "—"}</span></div>
+                  <div className="flex justify-between"><span>Ventana</span><span>{user.ventana}</span></div>
+                </div>
+              </Card>
+            </section>
+          )}
+
+          {tab === "plan" && (
+            <section className="space-y-4">
+              <Card title="Objetivos" icon={<Settings className="text-gray-600" size={18}/> }>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <label className="space-y-1">
+                    <span className="text-gray-600">Sexo</span>
+                    <select value={user.sexo} onChange={e=>saveUser({sexo: e.target.value as any})} className="w-full border rounded-xl px-3 py-2">
+                      <option value="M">Masculino</option>
+                      <option value="F">Femenino</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-gray-600">Edad</span>
+                    <input type="number" value={user.edad} onChange={e=>saveUser({edad: Number(e.target.value)})} className="w-full border rounded-xl px-3 py-2"/>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-gray-600">Talla (cm)</span>
+                    <input type="number" value={user.talla_cm} onChange={e=>saveUser({talla_cm: Number(e.target.value)})} className="w-full border rounded-xl px-3 py-2"/>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-gray-600">Peso (kg)</span>
+                    <input type="number" value={user.peso_kg} onChange={e=>saveUser({peso_kg: Number(e.target.value)})} className="w-full border rounded-xl px-3 py-2"/>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-gray-600">Actividad</span>
+                    <select value={user.actividad} onChange={e=>saveUser({actividad: e.target.value as any})} className="w-full border rounded-xl px-3 py-2">
+                      <option value="sedentario">Sedentario</option>
+                      <option value="ligero">Ligero</option>
+                      <option value="moderado">Moderado</option>
+                      <option value="activo">Activo</option>
+                      <option value="muy_activo">Muy activo</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-gray-600">Meta (kg/sem)</span>
+                    <input type="number" step={0.1} value={user.meta_kg_sem} onChange={e=>saveUser({meta_kg_sem: Number(e.target.value)})} className="w-full border rounded-xl px-3 py-2"/>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-gray-600">Proteína (g/kg/d)</span>
+                    <input type="number" step={0.1} value={user.prot_gkg} onChange={e=>saveUser({prot_gkg: Number(e.target.value)})} className="w-full border rounded-xl px-3 py-2"/>
+                  </label>
+                  <div className="col-span-2 grid grid-cols-2 gap-3">
+                    <label className="space-y-1">
+                      <span className="text-gray-600">Límite sodio (mg)</span>
+                      <input type="number" value={user.sodio_lim_mg} onChange={e=>saveUser({sodio_lim_mg: Number(e.target.value)})} className="w-full border rounded-xl px-3 py-2"/>
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-gray-600">Azúcar añadida (% VCT)</span>
+                      <input type="number" value={user.azucar_lim_pct} onChange={e=>saveUser({azucar_lim_pct: Number(e.target.value)})} className="w-full border rounded-xl px-3 py-2"/>
+                    </label>
+                  </div>
+                  <div className="col-span-2 grid grid-cols-2 gap-3">
+                    <label className="space-y-1">
+                      <span className="text-gray-600">Ventana</span>
+                      <select value={user.ventana} onChange={e=>saveUser({ventana: e.target.value as any})} className="w-full border rounded-xl px-3 py-2">
+                        <option value="14:10">14:10</option>
+                        <option value="16:8">16:8</option>
+                        <option value="Off">Off</option>
+                      </select>
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-gray-600">Salvaguardas</span>
+                      <select value={user.salvaguardas?"on":"off"} onChange={e=>saveUser({salvaguardas: e.target.value === "on"})} className="w-full border rounded-xl px-3 py-2">
+                        <option value="on">On</option>
+                        <option value="off">Off</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+                <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                  <InfoPill icon={<Flame size={16}/>} label="kcal objetivo" value={`${targets.kcal_obj}`}/>
+                  <InfoPill icon={<Utensils size={16}/>} label="proteína" value={`${targets.proteina_obj_g} g`}/>
+                  <InfoPill icon={<Leaf size={16}/>} label="fibra" value={`${targets.fibra_obj_g} g`}/>
+                  <InfoPill icon={<Cloud size={16}/>} label="sodio" value={`≤ ${targets.sodio_lim_mg} mg`}/>
+                </div>
+              </Card>
+            </section>
+          )}
+
+          {tab === "registro" && (
+            <Registro recipes={recipes} addMeal={addMeal} hoyStr={hoyStr} logToday={logToday} />
+          )}
+
+          {tab === "recetas" && (
+            <Recetas recipes={recipes} onAdd={(r)=> addMeal({ fecha: hoyStr, tipo: "almuerzo", receta_id: r.id })} />
+          )}
+
+          {tab === "reportes" && (
+            <Reportes user={user} logs={logs} meals={meals} recipes={recipes} targets={targets} />
+          )}
+        </main>
+
+        <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200">
+          <div className="max-w-3xl mx-auto px-2 py-2 grid grid-cols-5 text-xs">
+            <NavBtn active={tab==="inicio"} onClick={()=>setTab("inicio")} icon={<Sun size={18}/>} label="Inicio"/>
+            <NavBtn active={tab==="plan"} onClick={()=>setTab("plan")} icon={<Settings size={18}/>} label="Plan"/>
+            <NavBtn active={tab==="registro"} onClick={()=>setTab("registro")} icon={<Utensils size={18}/>} label="Registro"/>
+            <NavBtn active={tab==="recetas"} onClick={()=>setTab("recetas")} icon={<Apple size={18}/>} label="Recetas"/>
+            <NavBtn active={tab==="reportes"} onClick={()=>setTab("reportes")} icon={<Activity size={18}/>} label="Reportes"/>
+          </div>
+        </nav>
+      </div>
+    );
+  }
+
+  function NavBtn({active, onClick, icon, label}:{active:boolean; onClick:()=>void; icon:React.ReactNode; label:string}){
+    return (
+      <button onClick={onClick} className={`flex flex-col items-center gap-1 px-2 py-1 rounded-2xl ${active?"text-black":"text-gray-500"}`}>
+        {icon}
+        <span>{label}</span>
+      </button>
+    );
+  }
+
+  function InfoPill({icon, label, value}:{icon:React.ReactNode; label:string; value:string}){
+    return (
+      <div className="px-3 py-2 rounded-2xl border border-gray-200 bg-gray-50 flex items-center gap-2">
+        {icon}
+        <div>
+          <div className="text-xs text-gray-500">{label}</div>
+          <div className="text-sm font-semibold">{value}</div>
+        </div>
+      </div>
+    );
+  }
+
+  function Registro({recipes, addMeal, hoyStr, logToday}:{recipes:Recipe[]; addMeal:(m:Meal)=>void; hoyStr:string; logToday:(p:Partial<DayLog>)=>void}){
+    const [tipo, setTipo] = useState<Meal["tipo"]>("almuerzo");
+    const [query, setQuery] = useState("");
+    const filtered = useMemo(()=> recipes.filter(r => r.nombre.toLowerCase().includes(query.toLowerCase())), [recipes, query]);
+
+    const [peso, setPeso] = useState<string>("");
+    const [pasos, setPasos] = useState<string>("");
+    const [sueno, setSueno] = useState<string>("");
+    const [agua, setAgua] = useState<string>("");
+
+    return (
+      <section className="space-y-4">
+        <Card title="Registrar comida" icon={<Utensils className="text-gray-600" size={18}/> }>
+          <div className="flex gap-2 mb-2">
+            {(["desayuno","almuerzo","cena","colación"] as const).map(t => (
+              <Chip key={t} active={tipo===t} onClick={()=>setTipo(t)}>{t}</Chip>
+            ))}
+          </div>
+          <input placeholder="Buscar receta…" value={query} onChange={e=>setQuery(e.target.value)} className="w-full border rounded-xl px-3 py-2 mb-3"/>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-80 overflow-auto pr-1">
+            {filtered.slice(0, 12).map(r => (
+              <div key={r.id} className="border rounded-2xl p-3 hover:shadow-sm transition">
+                <div className="font-semibold mb-1">{r.nombre}</div>
+                <div className="text-xs text-gray-500 mb-2">{r.kcal} kcal · {r.prot_g} g prot · {r.fibra_g} g fibra</div>
+                <button onClick={()=>addMeal({fecha:hoyStr, tipo, receta_id:r.id})} className="w-full px-3 py-2 rounded-xl bg-black text-white">Añadir</button>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card title="Otros registros" icon={<Activity className="text-gray-600" size={18}/> }>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <label className="space-y-1">
+              <span className="text-gray-600">Peso (kg)</span>
+              <input type="number" value={peso} onChange={e=>setPeso(e.target.value)} className="w-full border rounded-xl px-3 py-2"/>
+            </label>
+            <label className="space-y-1">
+              <span className="text-gray-600">Pasos</span>
+              <input type="number" value={pasos} onChange={e=>setPasos(e.target.value)} className="w-full border rounded-xl px-3 py-2"/>
+            </label>
+            <label className="space-y-1">
+              <span className="text-gray-600">Sueño (h)</span>
+              <input type="number" step={0.1} value={sueno} onChange={e=>setSueno(e.target.value)} className="w-full border rounded-xl px-3 py-2"/>
+            </label>
+            <label className="space-y-1">
+              <span className="text-gray-600">Agua (ml)</span>
+              <input type="number" value={agua} onChange={e=>setAgua(e.target.value)} className="w-full border rounded-xl px-3 py-2"/>
+            </label>
+          </div>
+          <div className="mt-3">
+            <button onClick={()=>{
+              const p: Partial<DayLog> = {};
+              if(peso) p.peso_kg = Number(peso);
+              if(pasos) p.pasos = Number(pasos);
+              if(sueno) p.sueno_h = Number(sueno);
+              if(agua) p.agua_ml = Number(agua);
+              logToday(p);
+            }} className="px-4 py-2 rounded-2xl bg-black text-white">Guardar</button>
+          </div>
+        </Card>
+      </section>
+    );
+  }
+
+  function Recetas({recipes, onAdd}:{recipes:Recipe[]; onAdd:(r:Recipe)=>void}){
+    const [band, setBand] = useState<number|"all">("all");
+    const [q, setQ] = useState("");
+    const list = useMemo(()=>{
+      let arr = recipes;
+      if (band !== "all") arr = arr.filter(r => r.kcal === band);
+      if (q) arr = arr.filter(r => r.nombre.toLowerCase().includes(q.toLowerCase()));
+      return arr;
+    }, [recipes, band, q]);
+
+    return (
+      <section className="space-y-4">
+        <Card title="Catálogo (60 recetas)" icon={<Apple className="text-gray-600" size={18}/> }>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {["all",300,400,500,600,700].map((b:any)=> (
+              <Chip key={b} active={band===b} onClick={()=>setBand(b)}>{b==="all"?"Todas":f"{b} kcal"}</Chip>
+            ))}
+          </div>
+          <input placeholder="Buscar…" value={q} onChange={e=>setQ(e.target.value)} className="w-full border rounded-xl px-3 py-2 mb-3"/>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {list.slice(0, 20).map(r => (
+              <div key={r.id} className="border rounded-2xl p-3">
+                <div className="font-semibold mb-1">{r.nombre}</div>
+                <div className="text-xs text-gray-500 mb-2">{r.kcal} kcal · {r.prot_g} g prot · {r.fibra_g} g fibra · ≤{r.sodio_mg} mg Na</div>
+                <div className="text-xs text-gray-500 mb-2">Etiquetas: {r.etiquetas.join(", ")}</div>
+                <button onClick={()=>onAdd(r)} className="w-full px-3 py-2 rounded-xl bg-black text-white">Añadir hoy</button>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-gray-500 mt-3">* Se muestran 20 resultados; usa búsqueda o filtros para ver más.</div>
+        </Card>
+      </section>
+    );
+  }
+
+  type Targets = { kcal_obj:number; proteina_obj_g:number; fibra_obj_g:number; sodio_lim_mg:number; azucar_lim_pct:number };
+
+  function Reportes({user, logs, meals, recipes, targets}:{user:User; logs:DayLog[]; meals:Meal[]; recipes:Recipe[]; targets:Targets}){
+    const pesoSeries = logs.filter(l=>!!l.peso_kg).slice(-30).map(l=> ({ fecha: l.fecha.slice(5), peso: l.peso_kg }));
+
+    const byDate: Record<string, {kcal:number; prot_g:number; fibra_g:number; sodio_mg:number}> = {};
+    meals.forEach(m => {
+      const key = m.fecha;
+      const r = recipes.find(x=>x.id===m.receta_id);
+      const kcal = m.kcal ?? r?.kcal ?? 0;
+      const prot = m.prot_g ?? r?.prot_g ?? 0;
+      const fib = m.fibra_g ?? r?.fibra_g ?? 0;
+      const sod = m.sodio_mg ?? r?.sodio_mg ?? 0;
+      if(!byDate[key]) byDate[key] = {kcal:0, prot_g:0, fibra_g:0, sodio_mg:0};
+      byDate[key].kcal += kcal;
+      byDate[key].prot_g += prot;
+      byDate[key].fibra_g += fib;
+      byDate[key].sodio_mg += sod;
+    });
+    const last7 = getLastNDates(7).map(d => ({ fecha: d.slice(5), ...(byDate[d]||{kcal:0, prot_g:0, fibra_g:0, sodio_mg:0}) }));
+
+    const avg = (arr:number[]) => arr.length? arr.reduce((a,b)=>a+b,0)/arr.length : 0;
+
+    const radarData = [
+      { metric: "Calorías", valor: avg(last7.map(x=>x.kcal)) / targets.kcal_obj },
+      { metric: "Proteína", valor: avg(last7.map(x=>x.prot_g)) / targets.proteina_obj_g },
+      { metric: "Fibra", valor: avg(last7.map(x=>x.fibra_g)) / targets.fibra_obj_g },
+      { metric: "Sodio", valor: (targets.sodio_lim_mg) / Math.max(1, avg(last7.map(x=>x.sodio_mg))) },
+    ].map(x => ({ ...x, valor: clamp(x.valor,0,1) }));
+
+    async function exportJSON(){
+      const today = new Date().toISOString().slice(0,10);
+      const payload = {
+        paciente_id: user.id,
+        fecha: today,
+        kcal_obj: targets.kcal_obj,
+        proteina_obj_g: targets.proteina_obj_g,
+        fibra_obj_g: targets.fibra_obj_g,
+        sodio_lim_mg: targets.sodio_lim_mg,
+        azucar_lim_pct: targets.azucar_lim_pct,
+        ventana: user.ventana,
+        salvaguardas: user.salvaguardas,
+        peso_kg: logs.slice().reverse().find(l=>l.peso_kg)?.peso_kg || null,
+        cintura_cm: logs.slice().reverse().find(l=>l.cintura_cm)?.cintura_cm || null,
+        pasos: logs.slice().reverse().find(l=>l.pasos)?.pasos || null,
+        sueno_h: logs.slice().reverse().find(l=>l.sueno_h)?.sueno_h || null,
+        adherencia_pct: null,
+        comidas: meals.filter(m=>m.fecha===today).map(m=>{
+          const r = recipes.find(x=>x.id===m.receta_id);
+          return { tipo: m.tipo, kcal: m.kcal ?? r?.kcal ?? 0, prot_g: m.prot_g ?? r?.prot_g ?? 0, fibra_g: m.fibra_g ?? r?.fibra_g ?? 0, sodio_mg: m.sodio_mg ?? r?.sodio_mg ?? 0 }
+        })
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {type:"application/json"});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `Dieta5en1_${new Date().toISOString().slice(0,10)}.json`;
+      a.click();
+    }
+
+    async function exportPDF(){
+      const { jsPDF } = await import("jspdf");
+      const doc = new jsPDF();
+      doc.setFontSize(14);
+      doc.text("Dieta 5-en-1 — Resumen semanal", 14, 18);
+      doc.setFontSize(10);
+      doc.text(`Paciente: ${user.id}  Fecha: ${new Date().toLocaleDateString()}`, 14, 26);
+      doc.text(`Objetivos: kcal ${targets.kcal_obj}  Prot ${targets.proteina_obj_g} g  Fibra ${targets.fibra_obj_g} g  Na ≤ ${targets.sodio_lim_mg} mg`, 14, 32);
+      const last7 = getLastNDates(7).map(d => d.slice(5));
+      let y = 40;
+      last7.forEach((d, i) => { doc.text(`${d}: …`, 14, y); y+=6; });
+      doc.save(`Dieta5en1_${new Date().toISOString().slice(0,10)}.pdf`);
+    }
+
+    return (
+      <section className="space-y-4">
+        <Card title="Peso (últimos 30 días)" icon={<Weight className="text-gray-600" size={18}/> }>
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={pesoSeries}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="fecha" />
+                <YAxis />
+                <Tooltip />
+                <Line type="monotone" dataKey="peso" stroke="#111111" dot={false}/>
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        <Card title="Consumo (7 días)" icon={<Utensils className="text-gray-600" size={18}/> }>
+          <div className="h-56">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={getLastNDates(7).map(d=>({fecha:d.slice(5), kcal:0, prot_g:0, fibra_g:0}))}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="fecha" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="kcal" name="kcal" fill="#111111" />
+                <Bar dataKey="prot_g" name="proteína (g)" fill="#6b7280" />
+                <Bar dataKey="fibra_g" name="fibra (g)" fill="#a3a3a3" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        <Card title="Metas (media 7 días)" icon={<Activity className="text-gray-600" size={18}/> }>
+          <div className="h-56">
+            <ResponsiveContainer width="100%" height="100%">
+              <RadarChart data={[{metric:'Calorías',valor:0.6},{metric:'Proteína',valor:0.7},{metric:'Fibra',valor:0.5},{metric:'Sodio',valor:0.8}]} outerRadius={90}>
+                <PolarGrid />
+                <PolarAngleAxis dataKey="metric" />
+                <PolarRadiusAxis angle={30} domain={[0,1]} />
+                <Radar dataKey="valor" name="cumplimiento" stroke="#111111" fill="#111111" fillOpacity={0.3} />
+                <Tooltip />
+              </RadarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex gap-2 mt-3">
+            <button onClick={exportJSON} className="px-3 py-2 rounded-2xl border border-gray-300 flex items-center gap-2"><FileJson size={16}/> Exportar JSON</button>
+            <button onClick={exportPDF} className="px-3 py-2 rounded-2xl bg-black text-white flex items-center gap-2"><FileDown size={16}/> PDF semanal</button>
+          </div>
+        </Card>
+      </section>
+    );
+  }
+
+  function getLastNDates(n:number){
+    const a:string[]=[]; const today=new Date();
+    for(let i=n-1;i>=0;i--){ const d=new Date(today); d.setDate(today.getDate()-i); a.push(d.toISOString().slice(0,10)); }
+    return a;
+  }
+""")
+with open(os.path.join(project_dir, "src", "App.tsx"), "w") as f:
+    f.write(app_tsx)
+
+# sw-register and service worker
+sw_register = textwrap.dedent("""
+  export function registerSW(){
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/dieta-5en1-pwa/service-worker.js').catch(() => {});
+      });
+    }
+  }
+""")
+with open(os.path.join(project_dir, "src", "sw-register.ts"), "w") as f:
+    f.write(sw_register)
+
+# public files
+public_dir = os.path.join(project_dir, "public")
+os.makedirs(public_dir, exist_ok=True)
+
+manifest = {
+  "name": "Dieta 5-en-1",
+  "short_name": "Dieta5en1",
+  "start_url": "/dieta-5en1-pwa/",
+  "scope": "/dieta-5en1-pwa/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#000000",
+  "icons": [
+    {"src": "/dieta-5en1-pwa/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/dieta-5en1-pwa/icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "/dieta-5en1-pwa/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable any"}
+  ]
+}
+with open(os.path.join(public_dir, "manifest.webmanifest"), "w") as f:
+    json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+# Basic icons as placeholders (simple PNGs)
+from PIL import Image, ImageDraw
+icons_dir = os.path.join(public_dir, "icons")
+os.makedirs(icons_dir, exist_ok=True)
+def make_icon(size, name):
+    img = Image.new("RGBA", (size, size), (255,255,255,0))
+    draw = ImageDraw.Draw(img)
+    # simple black rounded square with leaf glyph-like
+    draw.rounded_rectangle([0,0,size-1,size-1], radius=int(size*0.2), fill=(0,0,0,255))
+    img.save(os.path.join(icons_dir, name))
+make_icon(192, "icon-192.png")
+make_icon(512, "icon-512.png")
+make_icon(512, "maskable-512.png")
+
+# service worker
+sw_js = textwrap.dedent("""
+  const CACHE = 'dieta5en1-v1';
+  const OFFLINE_URLS = [
+    '/dieta-5en1-pwa/',
+    '/dieta-5en1-pwa/index.html',
+  ];
+
+  self.addEventListener('install', (event) => {
+    event.waitUntil(caches.open(CACHE).then((cache)=> cache.addAll(OFFLINE_URLS)));
+    self.skipWaiting();
+  });
+
+  self.addEventListener('activate', (event) => {
+    event.waitUntil(self.clients.claim());
+  });
+
+  self.addEventListener('fetch', (event) => {
+    const url = new URL(event.request.url);
+    if (url.origin === location.origin) {
+      event.respondWith(
+        caches.match(event.request).then((cached) => cached || fetch(event.request).then((resp) => {
+          const copy = resp.clone();
+          caches.open(CACHE).then((cache)=> cache.put(event.request, copy));
+          return resp;
+        }).catch(()=> caches.match('/dieta-5en1-pwa/index.html')))
+      );
+    }
+  });
+""")
+with open(os.path.join(project_dir, "service-worker.js"), "w") as f:
+    f.write(sw_js)
+
+# index.html
+index_html = textwrap.dedent("""
+  <!doctype html>
+  <html lang="es">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="manifest" href="/dieta-5en1-pwa/manifest.webmanifest">
+      <meta name="apple-mobile-web-app-capable" content="yes">
+      <meta name="apple-mobile-web-app-status-bar-style" content="black">
+      <link rel="apple-touch-icon" href="/dieta-5en-1-pwa/icons/icon-192.png">
+      <title>Dieta 5-en-1</title>
+    </head>
+    <body>
+      <div id="root"></div>
+      <script type="module" src="/src/main.tsx"></script>
+    </body>
+  </html>
+""")
+with open(os.path.join(project_dir, "index.html"), "w") as f:
+    f.write(index_html)
+
+# .github workflow
+workflow_dir = os.path.join(project_dir, ".github", "workflows")
+os.makedirs(workflow_dir, exist_ok=True)
+deploy_yml = textwrap.dedent("""
+  name: Deploy to GitHub Pages
+  on:
+    push:
+      branches: [ main ]
+  permissions:
+    contents: read
+    pages: write
+    id-token: write
+  jobs:
+    build:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+        - uses: actions/setup-node@v4
+          with:
+            node-version: 20
+        - run: npm ci
+        - run: npm run build
+        - uses: actions/upload-pages-artifact@v3
+          with:
+            path: dist
+    deploy:
+      needs: build
+      runs-on: ubuntu-latest
+      environment:
+        name: github-pages
+        url: ${{ steps.deployment.outputs.page_url }}
+      steps:
+        - id: deployment
+          uses: actions/deploy-pages@v4
+""")
+with open(os.path.join(workflow_dir, "deploy.yml"), "w") as f:
+    f.write(deploy_yml)
+
+# README.md with instructions
+readme = textwrap.dedent("""
+  # Dieta 5-en-1 — PWA (React + Vite + Tailwind)
+
+  PWA minimalista estilo "Steve Jobs" para bajar de peso con la dieta 5-en-1.
+
+  ## Desarrollo local
+  ```bash
+  npm install
+  npm run dev
